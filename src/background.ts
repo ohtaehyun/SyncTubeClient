@@ -22,7 +22,7 @@ import {
 } from "./shared/types";
 
 // ============= 설정 =============
-const WS_URL = "wss://localhost:3000/ws"; // 환경변수나 설정에서 변경 가능
+const WS_URL = "ws://localhost:3000"; // 환경변수나 설정에서 변경 가능
 const RECONNECT_DELAY_MS = 1000;
 const LOG_PREFIX = "[BG]";
 
