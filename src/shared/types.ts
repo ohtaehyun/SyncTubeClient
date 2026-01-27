@@ -29,6 +29,7 @@ export enum MESSAGE_TYPE {
 /** 클라이언트가 서버로 보내는 메시지 타입 */
 export type ClientToServerMessage =
   | CreateRoomMessage
+  | LeaveRoomMessage
   | JoinRoomMessage
   | HostEventMessage;
 
@@ -38,6 +39,11 @@ export type ServerToClientMessage = RoomStateMessage | StatePatchMessage;
 export interface CreateRoomMessage {
   type: MESSAGE_TYPE.CREATE_ROOM;
   videoId: string;
+}
+
+export interface LeaveRoomMessage {
+  type: MESSAGE_TYPE.LEAVE_ROOM;
+  roomCode: string;
 }
 
 export interface JoinRoomMessage {

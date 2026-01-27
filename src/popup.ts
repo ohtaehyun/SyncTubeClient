@@ -109,7 +109,7 @@ function getElements() {
     ) as HTMLButtonElement,
     joinRoomBtn: document.getElementById("joinRoomBtn") as HTMLButtonElement,
     roomCodeInput: document.getElementById("roomCodeInput") as HTMLInputElement,
-    exitRoomBtn: document.getElementById("exitRoomBtn") as HTMLButtonElement,
+    leaveRoomBtn: document.getElementById("leaveRoomBtn") as HTMLButtonElement,
     roomCodeDisplay: document.getElementById("roomCodeDisplay") as HTMLElement,
   };
 }
@@ -353,6 +353,7 @@ async function leaveRoom(): Promise<void> {
     };
     updateStatus();
     showMessage("방을 나갔습니다.", "info");
+    console.log(state);
   });
 }
 
@@ -431,7 +432,7 @@ function setupEventListeners(): void {
   });
 
   // 방 나가기
-  els.exitRoomBtn.addEventListener("click", () => {
+  els.leaveRoomBtn.addEventListener("click", () => {
     leaveRoom();
   });
 

@@ -344,6 +344,16 @@ function handleCreateRoom(
   );
 }
 
+function handleLeaveRoom(roomCode: string): void {
+  sendToServer({ type: MESSAGE_TYPE.LEAVE_ROOM, roomCode });
+  state.role = null;
+  state.currentRoomCode = null;
+  state.lastRoomState = null;
+  state.lastVideoId = null;
+  updateStorageState();
+  log("방 나가기 처리 완료:", roomCode);
+}
+
 /**
  * Popup의 JOIN_ROOM 요청 처리
  */
@@ -445,33 +455,32 @@ chrome.runtime.onMessage.addListener(
     log("메시지 수신:", message, "from", sender.url);
 
     try {
-      // Popup에서의 메시지
-      if (message.type === MESSAGE_TYPE.CREATE_ROOM) {
-        handleCreateRoom(message.videoId, sendResponse);
-        return true;
-      }
+      switch (message.type as MESSAGE_TYPE) {
+        case MESSAGE_TYPE.CREATE_ROOM:
+          handleCreateRoom(message.videoId, sendResponse);
+          return true;
 
-      if (message.type === MESSAGE_TYPE.JOIN_ROOM) {
-        handleJoinRoom(message.roomCode, message.videoId, sendResponse);
-        return true;
-      }
+        case MESSAGE_TYPE.LEAVE_ROOM:
+          handleLeaveRoom(message.roomCode);
+          return true;
 
-      if (message.type === MESSAGE_TYPE.GET_STATUS) {
-        const response = getStatus();
-        sendResponse(response);
-        return;
-      }
+        case MESSAGE_TYPE.JOIN_ROOM:
+          handleJoinRoom(message.roomCode, message.videoId, sendResponse);
+          return true;
 
-      // Content Script에서의 메시지
-      if (message.type === MESSAGE_TYPE.PLAYER_EVENT) {
-        handlePlayerEvent(message);
-        sendResponse({ success: true });
-        return;
-      }
+        case MESSAGE_TYPE.GET_STATUS:
+          sendResponse(getStatus());
+          return true;
 
-      // 알 수 없는 메시지 타입
-      log("알 수 없는 메시지 타입:", message.type);
-      sendResponse({ success: false, error: "Unknown message type" });
+        case MESSAGE_TYPE.PLAYER_EVENT:
+          handlePlayerEvent(message);
+          sendResponse({ success: true });
+          return;
+
+        default:
+          log("알 수 없는 메시지 타입:", message.type);
+          sendResponse({ success: false, error: "Unknown message type" });
+      }
     } catch (error) {
       logError("메시지 처리 중 에러:", error);
       sendResponse({ success: false, error: String(error) });
