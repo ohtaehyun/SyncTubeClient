@@ -14,12 +14,14 @@ import {
   ClientToServerMessage,
   ServerToClientMessage,
   PopupToBackgroundMessage,
-  BackgroundToPopupResponse,
+  StatusResponse,
   ContentToBackgroundMessage,
   ExtensionState,
   RoomState,
   ApplyStateMessage,
   HostEventMessage,
+  ROLE,
+  MESSAGE_TYPE,
 } from "./shared/types";
 
 // ============= 설정 =============
@@ -32,7 +34,7 @@ const LOG_PREFIX = "[BG]";
 interface BackgroundState {
   socket: Socket | null;
   currentRoomCode: string | null;
-  role: "host" | "joiner" | null;
+  role: ROLE | null;
   lastRoomState: RoomState | null;
   isConnected: boolean;
   reconnectTimer: number | null;
@@ -88,10 +90,10 @@ function connectSocket(): void {
       if (
         state.currentRoomCode &&
         state.lastVideoId &&
-        state.role === "joiner"
+        state.role === ROLE.JOINER
       ) {
         sendToServer({
-          type: "JOIN_ROOM",
+          type: MESSAGE_TYPE.JOIN_ROOM,
           roomCode: state.currentRoomCode,
           videoId: state.lastVideoId,
         });
@@ -99,17 +101,13 @@ function connectSocket(): void {
       }
     });
 
-    // 서버 메시지 리스너
-    state.socket.on("ROOM_CREATED", (data: any) => {
-      handleServerMessage({ type: "ROOM_CREATED", ...data });
-    });
-
+    // 서버 메시지 리스너 (브로드캐스트 이벤트만)
     state.socket.on("ROOM_STATE", (data: any) => {
-      handleServerMessage({ type: "ROOM_STATE", ...data });
+      handleServerMessage({ type: MESSAGE_TYPE.ROOM_STATE, ...data });
     });
 
     state.socket.on("STATE_PATCH", (data: any) => {
-      handleServerMessage({ type: "STATE_PATCH", ...data });
+      handleServerMessage({ type: MESSAGE_TYPE.STATE_PATCH, ...data });
     });
 
     state.socket.on("disconnect", (reason: string) => {
@@ -163,20 +161,30 @@ function clearReconnectTimer(): void {
 }
 
 /**
- * 서버로 메시지 전송
+ * 서버로 메시지 전송 (콜백 지원)
  */
-function sendToServer(message: ClientToServerMessage): void {
+function sendToServer(
+  message: ClientToServerMessage,
+  callback?: (response: any) => void,
+): void {
   if (!state.socket || !state.socket.connected) {
     logError("Socket.IO 연결 상태 불일치, 메시지 전송 불가:", message);
+    if (callback) callback({ error: "Not connected" });
     return;
   }
 
   try {
-    // Socket.IO 이벤트로 전송
-    state.socket.emit(message.type, message);
+    if (callback) {
+      // 콜백 있으면 응답 받기
+      state.socket.emit(message.type, message, callback);
+    } else {
+      // 콜백 없으면 Fire-and-forget
+      state.socket.emit(message.type, message);
+    }
     log("서버로 메시지 전송:", message);
   } catch (error) {
     logError("메시지 전송 실패:", error);
+    if (callback) callback({ error: String(error) });
   }
 }
 
@@ -189,32 +197,17 @@ async function handleServerMessage(
   message: ServerToClientMessage,
 ): Promise<void> {
   switch (message.type) {
-    case "ROOM_CREATED":
-      handleRoomCreated(message);
-      break;
-
-    case "ROOM_STATE":
+    case MESSAGE_TYPE.ROOM_STATE:
       await handleRoomState(message);
       break;
 
-    case "STATE_PATCH":
+    case MESSAGE_TYPE.STATE_PATCH:
       await handleStatePatch(message);
       break;
 
     default:
       logError("알 수 없는 메시지 타입:", message);
   }
-}
-
-/**
- * 방 생성 응답 처리
- */
-function handleRoomCreated(message: { roomCode: string }): void {
-  log("방 생성 완료, roomCode:", message.roomCode);
-  state.currentRoomCode = message.roomCode;
-  state.role = "host";
-  updateStorageState();
-  notifyPopup();
 }
 
 /**
@@ -238,7 +231,7 @@ async function handleRoomState(message: any): Promise<void> {
 
   // Content Script에 상태 적용 요청
   await applyStateToContent({
-    type: "APPLY_STATE",
+    type: MESSAGE_TYPE.APPLY_STATE,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
     anchorTs: message.anchorTs,
@@ -264,7 +257,7 @@ async function handleStatePatch(message: any): Promise<void> {
 
   // Content Script에 상태 적용 요청
   await applyStateToContent({
-    type: "APPLY_STATE",
+    type: MESSAGE_TYPE.APPLY_STATE,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
     anchorTs: message.anchorTs,
@@ -321,44 +314,75 @@ async function applyStateToContent(message: ApplyStateMessage): Promise<void> {
 /**
  * Popup의 CREATE_ROOM 요청 처리
  */
-function handleCreateRoom(videoId: string): void {
+function handleCreateRoom(
+  videoId: string,
+  sendResponse: (response: any) => void,
+): void {
   log("CREATE_ROOM 요청:", videoId);
 
-  state.currentRoomCode = null;
-  state.role = "host";
+  state.role = ROLE.HOST;
   state.lastVideoId = videoId;
   updateStorageState();
 
-  sendToServer({
-    type: "CREATE_ROOM",
-    videoId,
-  });
+  sendToServer(
+    {
+      type: MESSAGE_TYPE.CREATE_ROOM,
+      videoId,
+    },
+    (response) => {
+      if (response.roomCode) {
+        state.currentRoomCode = response.roomCode;
+        state.role = ROLE.HOST;
+        updateStorageState();
+        log("방 생성 완료, roomCode:", response.roomCode);
+        sendResponse({ roomCode: response.roomCode });
+      } else {
+        logError("방 생성 실패:", response);
+        sendResponse({ roomCode: null });
+      }
+    },
+  );
 }
 
 /**
  * Popup의 JOIN_ROOM 요청 처리
  */
-function handleJoinRoom(roomCode: string, videoId: string): void {
+function handleJoinRoom(
+  roomCode: string,
+  videoId: string,
+  sendResponse: (response: any) => void,
+): void {
   log("JOIN_ROOM 요청:", roomCode, videoId);
 
   state.currentRoomCode = roomCode;
-  state.role = "joiner";
+  state.role = ROLE.JOINER;
   state.lastVideoId = videoId;
   updateStorageState();
 
-  sendToServer({
-    type: "JOIN_ROOM",
-    roomCode,
-    videoId,
-  });
+  sendToServer(
+    {
+      type: MESSAGE_TYPE.JOIN_ROOM,
+      roomCode,
+      videoId,
+    },
+    (response) => {
+      if (response.success !== false) {
+        log("방 참여 완료");
+        sendResponse({ success: true });
+      } else {
+        logError("방 참여 실패:", response);
+        sendResponse({ success: false, error: response.error });
+      }
+    },
+  );
 }
 
 /**
  * Popup으로 상태 응답
  */
-function getStatus(): BackgroundToPopupResponse {
+function getStatus(): StatusResponse {
   return {
-    type: "STATUS",
+    type: MESSAGE_TYPE.STATUS,
     roomCode: state.currentRoomCode,
     role: state.role,
     isConnected: state.isConnected,
@@ -391,14 +415,14 @@ async function notifyPopup(): Promise<void> {
  * Content Script의 PLAYER_EVENT 처리
  */
 function handlePlayerEvent(message: any): void {
-  if (!state.currentRoomCode || state.role !== "host") {
+  if (!state.currentRoomCode || state.role !== ROLE.HOST) {
     return; // 호스트만 처리
   }
 
   log("PLAYER_EVENT 수신:", message);
 
   const hostEvent: HostEventMessage = {
-    type: "HOST_EVENT",
+    type: MESSAGE_TYPE.HOST_EVENT,
     roomCode: state.currentRoomCode,
     event: message.event,
     currentTime: message.currentTime,
@@ -422,26 +446,24 @@ chrome.runtime.onMessage.addListener(
 
     try {
       // Popup에서의 메시지
-      if (message.type === "CREATE_ROOM") {
-        handleCreateRoom(message.videoId);
-        sendResponse({ success: true });
-        return;
+      if (message.type === MESSAGE_TYPE.CREATE_ROOM) {
+        handleCreateRoom(message.videoId, sendResponse);
+        return true;
       }
 
-      if (message.type === "JOIN_ROOM") {
-        handleJoinRoom(message.roomCode, message.videoId);
-        sendResponse({ success: true });
-        return;
+      if (message.type === MESSAGE_TYPE.JOIN_ROOM) {
+        handleJoinRoom(message.roomCode, message.videoId, sendResponse);
+        return true;
       }
 
-      if (message.type === "GET_STATUS") {
+      if (message.type === MESSAGE_TYPE.GET_STATUS) {
         const response = getStatus();
         sendResponse(response);
         return;
       }
 
       // Content Script에서의 메시지
-      if (message.type === "PLAYER_EVENT") {
+      if (message.type === MESSAGE_TYPE.PLAYER_EVENT) {
         handlePlayerEvent(message);
         sendResponse({ success: true });
         return;

@@ -10,7 +10,11 @@
 
 import {
   PopupToBackgroundMessage,
-  BackgroundToPopupResponse,
+  CreateRoomResponse,
+  JoinRoomResponse,
+  StatusResponse,
+  ROLE,
+  MESSAGE_TYPE,
 } from "./shared/types";
 
 // ============= 설정 =============
@@ -21,7 +25,7 @@ const STATUS_POLL_INTERVAL_MS = 500;
 
 interface PopupState {
   roomCode: string | null;
-  role: "host" | "joiner" | null;
+  role: ROLE | null;
   isConnected: boolean;
   revision: number;
   statusPollTimer: number | null;
@@ -210,11 +214,11 @@ async function getCurrentVideoId(): Promise<string | null> {
 /**
  * Service Worker 상태 요청
  */
-async function requestStatus(): Promise<BackgroundToPopupResponse | null> {
+async function requestStatus(): Promise<StatusResponse | null> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(
-      { type: "GET_STATUS" } as PopupToBackgroundMessage,
-      (response: BackgroundToPopupResponse | undefined) => {
+      { type: MESSAGE_TYPE.GET_STATUS } as PopupToBackgroundMessage,
+      (response: StatusResponse | undefined) => {
         if (chrome.runtime.lastError) {
           logError("상태 요청 실패:", chrome.runtime.lastError);
           resolve(null);
@@ -243,25 +247,24 @@ async function createRoom(): Promise<void> {
 
   try {
     log("CREATE_ROOM 요청:", videoId);
-    await chrome.runtime.sendMessage({
-      type: "CREATE_ROOM",
+    const response = (await chrome.runtime.sendMessage({
+      type: MESSAGE_TYPE.CREATE_ROOM,
       videoId,
-    } as PopupToBackgroundMessage);
+    } as PopupToBackgroundMessage)) as CreateRoomResponse;
 
-    showMessage("새 방을 생성했습니다!", "success");
-
-    // 상태 업데이트
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const status = await requestStatus();
-    if (status) {
+    if (response && response.roomCode) {
       state = {
         ...state,
-        roomCode: status.roomCode,
-        role: status.role,
-        isConnected: status.isConnected,
-        revision: status.revision,
+        roomCode: response.roomCode,
+        role: ROLE.HOST,
+        isConnected: true,
+        revision: state.revision + 1,
       };
       updateStatus();
+      showMessage(`방 코드: ${response.roomCode}`, "success");
+      log("방 생성 완료:", response.roomCode);
+    } else {
+      throw new Error("서버 응답이 올바르지 않습니다.");
     }
   } catch (error) {
     logError("방 생성 실패:", error);
@@ -301,33 +304,31 @@ async function joinRoom(): Promise<void> {
 
   try {
     log("JOIN_ROOM 요청:", roomCode, videoId);
-    await chrome.runtime.sendMessage({
-      type: "JOIN_ROOM",
+    const response = (await chrome.runtime.sendMessage({
+      type: MESSAGE_TYPE.JOIN_ROOM,
       roomCode,
       videoId,
-    } as PopupToBackgroundMessage);
+    } as PopupToBackgroundMessage)) as JoinRoomResponse;
 
-    showMessage(`${roomCode} 방에 참여했습니다!`, "success");
-
-    // 상태 업데이트
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const status = await requestStatus();
-    if (status) {
+    if (response && response.success) {
       state = {
         ...state,
-        roomCode: status.roomCode,
-        role: status.role,
-        isConnected: status.isConnected,
-        revision: status.revision,
+        roomCode: roomCode,
+        role: ROLE.JOINER,
+        isConnected: true,
+        revision: state.revision + 1,
       };
       updateStatus();
+      showMessage(`${roomCode} 방에 참여했습니다!`, "success");
+      log("방 참여 완료:", roomCode);
+    } else {
+      throw new Error("방 참여에 실패했습니다.");
     }
-
-    els.roomCodeInput.value = "";
   } catch (error) {
     logError("방 참여 실패:", error);
     showMessage("방 참여에 실패했습니다.", "error");
   } finally {
+    els.roomCodeInput.value = "";
     els.joinRoomBtn.disabled = false;
     els.joinRoomBtn.textContent = "참여";
   }
@@ -336,9 +337,14 @@ async function joinRoom(): Promise<void> {
 /**
  * 방 나가기
  */
-async function exitRoom(): Promise<void> {
-  // 현재 구현에서는 단순히 storage 초기화
-  // 실제로는 Service Worker와의 통신이 필요할 수 있음
+async function leaveRoom(): Promise<void> {
+  log("방 나가기 요청");
+
+  await chrome.runtime.sendMessage({
+    type: MESSAGE_TYPE.LEAVE_ROOM,
+    roomCode: state.roomCode,
+  } as PopupToBackgroundMessage);
+
   chrome.storage.local.set({ extensionState: null }, () => {
     state = {
       ...state,
@@ -426,7 +432,7 @@ function setupEventListeners(): void {
 
   // 방 나가기
   els.exitRoomBtn.addEventListener("click", () => {
-    exitRoom();
+    leaveRoom();
   });
 
   // 방 코드 입력창: Enter로 참여

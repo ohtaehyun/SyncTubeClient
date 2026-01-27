@@ -12,6 +12,7 @@ import {
   ApplyStateMessage,
   ContentToBackgroundMessage,
   BackgroundToContentMessage,
+  MESSAGE_TYPE,
 } from "./shared/types";
 
 // ============= 설정 =============
@@ -189,7 +190,7 @@ function sendPlayerEvent(
   currentTime: number,
 ): void {
   const message: ContentToBackgroundMessage = {
-    type: "PLAYER_EVENT",
+    type: MESSAGE_TYPE.PLAYER_EVENT,
     roomCode: "", // Service Worker에서 채움
     event,
     currentTime,
@@ -264,7 +265,7 @@ chrome.runtime.onMessage.addListener(
     log("메시지 수신:", message);
 
     try {
-      if (message.type === "APPLY_STATE") {
+      if (message.type === MESSAGE_TYPE.APPLY_STATE) {
         applyState(message).then(() => {
           sendResponse({ success: true });
         });
