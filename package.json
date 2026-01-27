@@ -3,13 +3,24 @@
   "version": "1.0.0",
   "description": "Chrome Extension for synchronized YouTube watching",
   "scripts": {
-    "build": "node scripts/build.js",
-    "dev": "node scripts/build.js --watch"
+    "build": "node scripts/bundle.js",
+    "dev": "node scripts/bundle.js --watch",
+    "build:tsc": "node scripts/build.js"
   },
-  "keywords": ["youtube", "sync", "watch-together"],
+  "keywords": [
+    "youtube",
+    "sync",
+    "watch-together"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/chrome": "^0.0.269"
+    "@types/chrome": "^0.0.269",
+    "@types/node": "^25.0.10",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.3"
   }
 }

@@ -2,13 +2,14 @@
  * Service Worker (Background Script)
  *
  * 역할:
- * 1. WebSocket 서버 연결 관리
+ * 1. Socket.IO 서버 연결 관리
  * 2. 룸 생성/참여 처리
  * 3. 서버 메시지 수신 및 content script로 전달
  * 4. 호스트의 플레이어 이벤트 서버로 전송
  * 5. chrome.storage를 통한 상태 관리
  */
 
+import { io, Socket } from "socket.io-client";
 import {
   ClientToServerMessage,
   ServerToClientMessage,
@@ -22,14 +23,14 @@ import {
 } from "./shared/types";
 
 // ============= 설정 =============
-const WS_URL = "ws://localhost:3000"; // 환경변수나 설정에서 변경 가능
+const SERVER_URL = "http://localhost:3000"; // Socket.IO 서버 URL
 const RECONNECT_DELAY_MS = 1000;
 const LOG_PREFIX = "[BG]";
 
 // ============= 상태 관리 =============
 
 interface BackgroundState {
-  ws: WebSocket | null;
+  socket: Socket | null;
   currentRoomCode: string | null;
   role: "host" | "joiner" | null;
   lastRoomState: RoomState | null;
@@ -39,7 +40,7 @@ interface BackgroundState {
 }
 
 let state: BackgroundState = {
-  ws: null,
+  socket: null,
   currentRoomCode: null,
   role: null,
   lastRoomState: null,
@@ -58,23 +59,27 @@ function logError(...args: any[]): void {
   console.error(LOG_PREFIX, ...args);
 }
 
-// ============= WebSocket 관리 =============
+// ============= Socket.IO 관리 =============
 
 /**
- * WebSocket 연결 초기화
+ * Socket.IO 연결 초기화
  */
-function connectWebSocket(): void {
-  if (state.ws) {
+function connectSocket(): void {
+  if (state.socket && state.socket.connected) {
     return; // 이미 연결 중
   }
 
-  log("WebSocket 연결 시도:", WS_URL);
+  log("Socket.IO 연결 시도:", SERVER_URL);
 
   try {
-    state.ws = new WebSocket(WS_URL);
+    state.socket = io(SERVER_URL, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionDelay: RECONNECT_DELAY_MS,
+    });
 
-    state.ws.onopen = () => {
-      log("WebSocket 연결 성공");
+    state.socket.on("connect", () => {
+      log("Socket.IO 연결 성공");
       state.isConnected = true;
       updateStorageState();
       clearReconnectTimer();
@@ -92,32 +97,42 @@ function connectWebSocket(): void {
         });
         log("기존 방에 재입장:", state.currentRoomCode);
       }
-    };
+    });
 
-    state.ws.onmessage = (event: MessageEvent) => {
-      try {
-        const message: ServerToClientMessage = JSON.parse(event.data);
-        handleServerMessage(message);
-      } catch (error) {
-        logError("메시지 파싱 실패:", error);
+    // 서버 메시지 리스너
+    state.socket.on("ROOM_CREATED", (data: any) => {
+      handleServerMessage({ type: "ROOM_CREATED", ...data });
+    });
+
+    state.socket.on("ROOM_STATE", (data: any) => {
+      handleServerMessage({ type: "ROOM_STATE", ...data });
+    });
+
+    state.socket.on("STATE_PATCH", (data: any) => {
+      handleServerMessage({ type: "STATE_PATCH", ...data });
+    });
+
+    state.socket.on("disconnect", (reason: string) => {
+      log("Socket.IO 연결 종료:", reason);
+      state.isConnected = false;
+      updateStorageState();
+      if (reason === "io server disconnect") {
+        // 서버가 연결을 끊은 경우 수동 재연결
+        scheduleReconnect();
       }
-    };
+    });
 
-    state.ws.onerror = (error: Event) => {
-      logError("WebSocket 에러:", error);
+    state.socket.on("connect_error", (error: Error) => {
+      logError("Socket.IO 연결 에러:", error);
       state.isConnected = false;
       updateStorageState();
-    };
+    });
 
-    state.ws.onclose = () => {
-      log("WebSocket 연결 종료");
-      state.isConnected = false;
-      state.ws = null;
-      updateStorageState();
-      scheduleReconnect();
-    };
+    state.socket.on("error", (error: any) => {
+      logError("Socket.IO 에러:", error);
+    });
   } catch (error) {
-    logError("WebSocket 생성 실패:", error);
+    logError("Socket.IO 생성 실패:", error);
     scheduleReconnect();
   }
 }
@@ -133,7 +148,7 @@ function scheduleReconnect(): void {
   log("재연결 예약:", RECONNECT_DELAY_MS, "ms 후");
   state.reconnectTimer = window.setTimeout(() => {
     state.reconnectTimer = null;
-    connectWebSocket();
+    connectSocket();
   }, RECONNECT_DELAY_MS);
 }
 
@@ -151,13 +166,14 @@ function clearReconnectTimer(): void {
  * 서버로 메시지 전송
  */
 function sendToServer(message: ClientToServerMessage): void {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    logError("WebSocket 연결 상태 불일치, 메시지 전송 불가:", message);
+  if (!state.socket || !state.socket.connected) {
+    logError("Socket.IO 연결 상태 불일치, 메시지 전송 불가:", message);
     return;
   }
 
   try {
-    state.ws.send(JSON.stringify(message));
+    // Socket.IO 이벤트로 전송
+    state.socket.emit(message.type, message);
     log("서버로 메시지 전송:", message);
   } catch (error) {
     logError("메시지 전송 실패:", error);
@@ -493,8 +509,8 @@ async function initialize(): Promise<void> {
   // 저장된 상태 로드
   await loadStorageState();
 
-  // WebSocket 연결 시작
-  connectWebSocket();
+  // Socket.IO 연결 시작
+  connectSocket();
 
   log("Service Worker 초기화 완료");
 }
