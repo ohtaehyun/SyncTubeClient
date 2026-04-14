@@ -209,6 +209,29 @@ async function getCurrentVideoId(): Promise<string | null> {
   }
 }
 
+/**
+ * 현재 탭의 YouTube 영상 재생상태와 타임스탬프 추출
+ */
+async function getCurrentVideoState(): Promise<{
+  isPlaying: boolean;
+  currentTime: number;
+} | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab && tab.id) {
+    const execResult = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const video = document.querySelector("video");
+        return video
+          ? { isPlaying: !video.paused, currentTime: video.currentTime }
+          : undefined;
+      },
+    });
+    return execResult[0]?.result || null;
+  }
+  return null;
+}
+
 // ============= Service Worker 통신 =============
 
 /**
@@ -241,18 +264,31 @@ async function createRoom(): Promise<void> {
     return;
   }
 
+  // 영상 상태 추출 함수 사용
+  const videoState = await getCurrentVideoState();
+  if (!videoState) {
+    showMessage("영상 상태 정보를 가져올 수 없습니다.", "error");
+    logError("영상 상태 정보 추출 실패: result is undefined");
+    return;
+  }
+  const { isPlaying, currentTime } = videoState;
+
   const els = getElements();
   els.createRoomBtn.disabled = true;
   els.createRoomBtn.textContent = "생성 중...";
 
   try {
-    log("CREATE_ROOM 요청:", videoId);
+    log("CREATE_ROOM 요청:", videoId, isPlaying, currentTime);
     const response = (await chrome.runtime.sendMessage({
       type: MESSAGE_TYPE.CREATE_ROOM,
       videoId,
+      isPlaying,
+      currentTime,
     } as PopupToBackgroundMessage)) as CreateRoomResponse;
 
-    if (response && response.code) {
+    console.log("CREATE_ROOM 응답:", response);
+
+    if (response && response.success && response.code) {
       state = {
         ...state,
         code: response.code,

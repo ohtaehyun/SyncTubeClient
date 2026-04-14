@@ -5,7 +5,8 @@
   "description": "Watch YouTube videos together in sync",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.youtube.com/*"

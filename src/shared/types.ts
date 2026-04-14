@@ -39,6 +39,8 @@ export type ServerToClientMessage = RoomStateMessage | StatePatchMessage;
 export interface CreateRoomMessage {
   type: MESSAGE_TYPE.CREATE_ROOM;
   videoId: string;
+  isPlaying: boolean;
+  currentTime: number;
 }
 
 export interface LeaveRoomMessage {
@@ -89,6 +91,8 @@ export type PopupToBackgroundMessage =
 export interface CreateRoomRequest {
   type: MESSAGE_TYPE.CREATE_ROOM;
   videoId: string;
+  isPlaying: boolean;
+  currentTime: number;
 }
 
 export interface LeaveRoomRequest {

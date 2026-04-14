@@ -316,9 +316,11 @@ async function applyStateToContent(message: ApplyStateMessage): Promise<void> {
  */
 function handleCreateRoom(
   videoId: string,
+  isPlaying: boolean,
+  currentTime: number,
   sendResponse: (response: any) => void,
 ): void {
-  log("CREATE_ROOM 요청:", videoId);
+  log("CREATE_ROOM 요청:", videoId, isPlaying, currentTime);
 
   state.role = ROLE.HOST;
   state.lastVideoId = videoId;
@@ -328,6 +330,8 @@ function handleCreateRoom(
     {
       type: MESSAGE_TYPE.CREATE_ROOM,
       videoId,
+      isPlaying,
+      currentTime,
     },
     (response) => {
       if (response.code) {
@@ -335,10 +339,10 @@ function handleCreateRoom(
         state.role = ROLE.HOST;
         updateStorageState();
         log("방 생성 완료, code:", response.code);
-        sendResponse({ code: response.code });
+        sendResponse({ success: true, code: response.code });
       } else {
         logError("방 생성 실패:", response);
-        sendResponse({ code: null });
+        sendResponse({ success: false, code: null });
       }
     },
   );
@@ -460,7 +464,12 @@ chrome.runtime.onMessage.addListener(
     try {
       switch (message.type as MESSAGE_TYPE) {
         case MESSAGE_TYPE.CREATE_ROOM:
-          handleCreateRoom(message.videoId, sendResponse);
+          handleCreateRoom(
+            message.videoId,
+            message.isPlaying,
+            message.currentTime,
+            sendResponse,
+          );
           return true;
 
         case MESSAGE_TYPE.LEAVE_ROOM:
