@@ -43,25 +43,24 @@ export interface CreateRoomMessage {
 
 export interface LeaveRoomMessage {
   type: MESSAGE_TYPE.LEAVE_ROOM;
-  roomCode: string;
+  code: string;
 }
 
 export interface JoinRoomMessage {
   type: MESSAGE_TYPE.JOIN_ROOM;
-  roomCode: string;
-  videoId: string;
+  code: string;
 }
 
 export interface HostEventMessage {
   type: MESSAGE_TYPE.HOST_EVENT;
-  roomCode: string;
+  code: string;
   event: "PLAY" | "PAUSE" | "SEEK";
   currentTime: number;
 }
 
 export interface RoomStateMessage {
   type: MESSAGE_TYPE.ROOM_STATE;
-  roomCode: string;
+  code: string;
   videoId: string;
   isPlaying: boolean;
   anchorTime: number; // 기준 재생 시간(초)
@@ -71,7 +70,7 @@ export interface RoomStateMessage {
 
 export interface StatePatchMessage {
   type: MESSAGE_TYPE.STATE_PATCH;
-  roomCode: string;
+  code: string;
   isPlaying: boolean;
   anchorTime: number;
   anchorTs: number;
@@ -94,13 +93,12 @@ export interface CreateRoomRequest {
 
 export interface LeaveRoomRequest {
   type: MESSAGE_TYPE.LEAVE_ROOM;
-  roomCode: string;
+  code: string;
 }
 
 export interface JoinRoomRequest {
   type: MESSAGE_TYPE.JOIN_ROOM;
-  roomCode: string;
-  videoId: string;
+  code: string;
 }
 
 export interface GetStatusRequest {
@@ -110,18 +108,24 @@ export interface GetStatusRequest {
 /** Service Worker → Popup (응답) */
 export interface StatusResponse {
   type: MESSAGE_TYPE.STATUS;
-  roomCode: string | null;
+  code: string | null;
   role: ROLE | null;
   isConnected: boolean;
   revision: number;
 }
 
 export interface CreateRoomResponse {
-  roomCode: string;
+  success: boolean;
+  code?: string;
+  error?: string;
 }
 
 export interface JoinRoomResponse {
   success: boolean;
+  code?: string;
+  videoId?: string;
+  url?: string;
+  error?: string;
 }
 
 /** Service Worker → Content Script */
@@ -140,7 +144,7 @@ export type ContentToBackgroundMessage = PlayerEventMessage | GetVideoIdRequest;
 
 export interface PlayerEventMessage {
   type: MESSAGE_TYPE.PLAYER_EVENT;
-  roomCode: string;
+  code: string;
   event: "PLAY" | "PAUSE" | "SEEK";
   currentTime: number;
 }
@@ -152,7 +156,7 @@ export interface GetVideoIdRequest {
 // ============= 상태 타입 =============
 
 export interface RoomState {
-  roomCode: string;
+  code: string;
   videoId: string;
   isPlaying: boolean;
   anchorTime: number;
@@ -161,7 +165,7 @@ export interface RoomState {
 }
 
 export interface ExtensionState {
-  roomCode: string | null;
+  code: string | null;
   role: ROLE | null;
   lastState: RoomState | null;
   isConnected: boolean;

@@ -94,9 +94,9 @@ function connectSocket(): void {
       ) {
         sendToServer({
           type: MESSAGE_TYPE.JOIN_ROOM,
-          roomCode: state.currentRoomCode,
-          videoId: state.lastVideoId,
+          code: state.currentRoomCode,
         });
+
         log("기존 방에 재입장:", state.currentRoomCode);
       }
     });
@@ -217,7 +217,7 @@ async function handleRoomState(message: any): Promise<void> {
   log("ROOM_STATE 수신:", message);
 
   const roomState: RoomState = {
-    roomCode: message.roomCode,
+    code: message.code,
     videoId: message.videoId,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
@@ -226,7 +226,7 @@ async function handleRoomState(message: any): Promise<void> {
   };
 
   state.lastRoomState = roomState;
-  state.currentRoomCode = message.roomCode;
+  state.currentRoomCode = message.code;
   updateStorageState();
 
   // Content Script에 상태 적용 요청
@@ -330,55 +330,58 @@ function handleCreateRoom(
       videoId,
     },
     (response) => {
-      if (response.roomCode) {
-        state.currentRoomCode = response.roomCode;
+      if (response.code) {
+        state.currentRoomCode = response.code;
         state.role = ROLE.HOST;
         updateStorageState();
-        log("방 생성 완료, roomCode:", response.roomCode);
-        sendResponse({ roomCode: response.roomCode });
+        log("방 생성 완료, code:", response.code);
+        sendResponse({ code: response.code });
       } else {
         logError("방 생성 실패:", response);
-        sendResponse({ roomCode: null });
+        sendResponse({ code: null });
       }
     },
   );
 }
 
-function handleLeaveRoom(roomCode: string): void {
-  sendToServer({ type: MESSAGE_TYPE.LEAVE_ROOM, roomCode });
+function handleLeaveRoom(code: string): void {
+  sendToServer({ type: MESSAGE_TYPE.LEAVE_ROOM, code });
   state.role = null;
   state.currentRoomCode = null;
   state.lastRoomState = null;
   state.lastVideoId = null;
   updateStorageState();
-  log("방 나가기 처리 완료:", roomCode);
+  log("방 나가기 처리 완료:", code);
 }
 
 /**
  * Popup의 JOIN_ROOM 요청 처리
  */
 function handleJoinRoom(
-  roomCode: string,
-  videoId: string,
+  code: string,
   sendResponse: (response: any) => void,
 ): void {
-  log("JOIN_ROOM 요청:", roomCode, videoId);
-
-  state.currentRoomCode = roomCode;
-  state.role = ROLE.JOINER;
-  state.lastVideoId = videoId;
-  updateStorageState();
+  log("JOIN_ROOM 요청:", code);
 
   sendToServer(
     {
       type: MESSAGE_TYPE.JOIN_ROOM,
-      roomCode,
-      videoId,
+      code: code,
     },
     (response) => {
+      log("JOIN_ROOM 응답:", response);
       if (response.success !== false) {
+        // 성공했을 때만 state 업데이트
+        state.currentRoomCode = code;
+        state.role = ROLE.JOINER;
+        updateStorageState();
         log("방 참여 완료");
-        sendResponse({ success: true });
+        sendResponse({
+          success: true,
+          code: code,
+          videoId: response.videoId,
+          url: response.url,
+        });
       } else {
         logError("방 참여 실패:", response);
         sendResponse({ success: false, error: response.error });
@@ -393,7 +396,7 @@ function handleJoinRoom(
 function getStatus(): StatusResponse {
   return {
     type: MESSAGE_TYPE.STATUS,
-    roomCode: state.currentRoomCode,
+    code: state.currentRoomCode,
     role: state.role,
     isConnected: state.isConnected,
     revision: state.lastRoomState?.revision ?? 0,
@@ -433,7 +436,7 @@ function handlePlayerEvent(message: any): void {
 
   const hostEvent: HostEventMessage = {
     type: MESSAGE_TYPE.HOST_EVENT,
-    roomCode: state.currentRoomCode,
+    code: state.currentRoomCode,
     event: message.event,
     currentTime: message.currentTime,
   };
@@ -461,11 +464,11 @@ chrome.runtime.onMessage.addListener(
           return true;
 
         case MESSAGE_TYPE.LEAVE_ROOM:
-          handleLeaveRoom(message.roomCode);
+          handleLeaveRoom(message.code);
           return true;
 
         case MESSAGE_TYPE.JOIN_ROOM:
-          handleJoinRoom(message.roomCode, message.videoId, sendResponse);
+          handleJoinRoom(message.code, sendResponse);
           return true;
 
         case MESSAGE_TYPE.GET_STATUS:
@@ -495,7 +498,7 @@ chrome.runtime.onMessage.addListener(
  */
 function updateStorageState(): void {
   const extensionState: ExtensionState = {
-    roomCode: state.currentRoomCode,
+    code: state.currentRoomCode,
     role: state.role,
     lastState: state.lastRoomState,
     isConnected: state.isConnected,
@@ -516,7 +519,7 @@ async function loadStorageState(): Promise<void> {
       (result: { extensionState?: ExtensionState }) => {
         if (result.extensionState) {
           const saved = result.extensionState;
-          state.currentRoomCode = saved.roomCode;
+          state.currentRoomCode = saved.code;
           state.role = saved.role;
           state.lastRoomState = saved.lastState;
           log("저장된 상태 로드 완료:", saved);

@@ -191,7 +191,7 @@ function sendPlayerEvent(
 ): void {
   const message: ContentToBackgroundMessage = {
     type: MESSAGE_TYPE.PLAYER_EVENT,
-    roomCode: "", // Service Worker에서 채움
+    code: "", // Service Worker에서 채움
     event,
     currentTime,
   };

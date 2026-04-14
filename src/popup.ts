@@ -24,7 +24,7 @@ const STATUS_POLL_INTERVAL_MS = 500;
 // ============= 상태 관리 =============
 
 interface PopupState {
-  roomCode: string | null;
+  code: string | null;
   role: ROLE | null;
   isConnected: boolean;
   revision: number;
@@ -33,7 +33,7 @@ interface PopupState {
 }
 
 let state: PopupState = {
-  roomCode: null,
+  code: null,
   role: null,
   isConnected: false,
   revision: 0,
@@ -129,11 +129,11 @@ function updateStatus(): void {
   }
 
   // 방 상태 섹션
-  if (state.roomCode) {
+  if (state.code) {
     els.roomStatusSection.style.display = "block";
     els.createRoomSection.style.display = "none";
     els.joinRoomSection.style.display = "none";
-    els.roomCodeDisplay.textContent = state.roomCode;
+    els.roomCodeDisplay.textContent = state.code;
   } else {
     els.roomStatusSection.style.display = "none";
     els.createRoomSection.style.display = "block";
@@ -142,7 +142,7 @@ function updateStatus(): void {
 
   log("UI 업데이트:", {
     connected: state.isConnected,
-    roomCode: state.roomCode,
+    code: state.code,
     role: state.role,
   });
 }
@@ -252,19 +252,21 @@ async function createRoom(): Promise<void> {
       videoId,
     } as PopupToBackgroundMessage)) as CreateRoomResponse;
 
-    if (response && response.roomCode) {
+    if (response && response.code) {
       state = {
         ...state,
-        roomCode: response.roomCode,
+        code: response.code,
         role: ROLE.HOST,
         isConnected: true,
         revision: state.revision + 1,
       };
       updateStatus();
-      showMessage(`방 코드: ${response.roomCode}`, "success");
-      log("방 생성 완료:", response.roomCode);
+      showMessage(`방 코드: ${response.code}`, "success");
+      log("방 생성 완료:", response.code);
     } else {
-      throw new Error("서버 응답이 올바르지 않습니다.");
+      const errorMsg = response?.error || "방 생성에 실패했습니다.";
+      showMessage(errorMsg, "error");
+      logError("방 생성 실패:", errorMsg);
     }
   } catch (error) {
     logError("방 생성 실패:", error);
@@ -280,22 +282,15 @@ async function createRoom(): Promise<void> {
  */
 async function joinRoom(): Promise<void> {
   const els = getElements();
-  const roomCode = els.roomCodeInput.value.trim().toUpperCase();
+  const code = els.roomCodeInput.value.trim().toUpperCase();
 
-  if (!roomCode) {
+  if (!code) {
     showMessage("방 코드를 입력해주세요.", "error");
     return;
   }
 
-  if (roomCode.length !== 8) {
-    showMessage("방 코드는 8자여야 합니다.", "error");
-    return;
-  }
-
-  const videoId = await getCurrentVideoId();
-
-  if (!videoId) {
-    showMessage("YouTube 페이지에서 영상을 선택해주세요.", "error");
+  if (code.length !== 6) {
+    showMessage("방 코드는 6자여야 합니다.", "error");
     return;
   }
 
@@ -303,26 +298,40 @@ async function joinRoom(): Promise<void> {
   els.joinRoomBtn.textContent = "참여 중...";
 
   try {
-    log("JOIN_ROOM 요청:", roomCode, videoId);
+    log("JOIN_ROOM 요청:", code);
     const response = (await chrome.runtime.sendMessage({
       type: MESSAGE_TYPE.JOIN_ROOM,
-      roomCode,
-      videoId,
+      code,
     } as PopupToBackgroundMessage)) as JoinRoomResponse;
 
     if (response && response.success) {
       state = {
         ...state,
-        roomCode: roomCode,
+        code: code,
         role: ROLE.JOINER,
         isConnected: true,
+        lastVideoId: response.videoId || null,
         revision: state.revision + 1,
       };
       updateStatus();
-      showMessage(`${roomCode} 방에 참여했습니다!`, "success");
-      log("방 참여 완료:", roomCode);
+      showMessage(`${code} 방에 참여했습니다!`, "success");
+      log("방 참여 완료:", code);
+
+      // 응답받은 URL로 현재 탭 이동
+      if (response.url) {
+        const tabs = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        if (tabs[0]?.id) {
+          await chrome.tabs.update(tabs[0].id, { url: response.url });
+          log("영상 페이지로 이동:", response.url);
+        }
+      }
     } else {
-      throw new Error("방 참여에 실패했습니다.");
+      const errorMsg = response?.error || "방 참여에 실패했습니다.";
+      showMessage(errorMsg, "error");
+      logError("방 참여 실패:", errorMsg);
     }
   } catch (error) {
     logError("방 참여 실패:", error);
@@ -342,13 +351,13 @@ async function leaveRoom(): Promise<void> {
 
   await chrome.runtime.sendMessage({
     type: MESSAGE_TYPE.LEAVE_ROOM,
-    roomCode: state.roomCode,
+    code: state.code,
   } as PopupToBackgroundMessage);
 
   chrome.storage.local.set({ extensionState: null }, () => {
     state = {
       ...state,
-      roomCode: null,
+      code: null,
       role: null,
     };
     updateStatus();
@@ -369,13 +378,13 @@ async function pollStatus(): Promise<void> {
     if (status) {
       const changed =
         state.isConnected !== status.isConnected ||
-        state.roomCode !== status.roomCode ||
+        state.code !== status.code ||
         state.role !== status.role;
 
       state = {
         ...state,
         isConnected: status.isConnected,
-        roomCode: status.roomCode,
+        code: status.code,
         role: status.role,
         revision: status.revision,
       };
@@ -445,8 +454,8 @@ function setupEventListeners(): void {
 
   // 방 코드 입력창: 입력 시 참여 버튼 활성화
   els.roomCodeInput.addEventListener("input", () => {
-    const roomCode = els.roomCodeInput.value.trim().toUpperCase();
-    els.joinRoomBtn.disabled = roomCode.length !== 8;
+    const code = els.roomCodeInput.value.trim().toUpperCase();
+    els.joinRoomBtn.disabled = code.length !== 6;
   });
 
   log("이벤트 리스너 설정 완료");
