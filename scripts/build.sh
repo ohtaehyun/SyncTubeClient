@@ -6,7 +6,7 @@
 # 에러 발생 시 중단
 set -e
 
-echo "🔨 TypeScript 컴파일 중..."
+echo "🔨 esbuild로 번들링 중..."
 
 # node_modules 확인
 if [ ! -d "node_modules" ]; then
@@ -14,8 +14,8 @@ if [ ! -d "node_modules" ]; then
   npm install --legacy-peer-deps
 fi
 
-# TypeScript 컴파일
-npx tsc
+# esbuild 번들링 (socket.io-client 포함)
+node scripts/bundle.js
 
 echo "✅ 빌드 완료!"
 echo "📂 Output directory: ./dist"
