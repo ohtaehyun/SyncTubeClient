@@ -12,6 +12,7 @@ import {
   ApplyStateMessage,
   ContentToBackgroundMessage,
   BackgroundToContentMessage,
+  ExtensionState,
   MESSAGE_TYPE,
 } from "./shared/types";
 
@@ -19,6 +20,7 @@ import {
 const LOG_PREFIX = "[CS]";
 const VIDEO_SEARCH_RETRY_LIMIT = 10;
 const VIDEO_SEARCH_RETRY_DELAY_MS = 500;
+const INITIAL_PAUSE_ENFORCEMENT_MS = [0, 250, 1000, 2000];
 
 // ============= 상태 관리 =============
 
@@ -26,12 +28,14 @@ interface ContentState {
   isApplying: boolean; // 동기화 적용 중 플래그
   lastAppliedRevision: number;
   lastVideoElement: HTMLVideoElement | null;
+  suppressPlayerEventsUntil: number;
 }
 
 let state: ContentState = {
   isApplying: false,
   lastAppliedRevision: 0,
   lastVideoElement: null,
+  suppressPlayerEventsUntil: 0,
 };
 
 // ============= 로깅 유틸 =============
@@ -116,6 +120,12 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
   }
 
   state.isApplying = true;
+  state.suppressPlayerEventsUntil = Date.now() + 800;
+  log("APPLY_STATE started", {
+    isPlaying: message.isPlaying,
+    anchorTime: message.anchorTime,
+    revision: message.revision,
+  });
 
   try {
     const video = await getVideo();
@@ -172,6 +182,11 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
     }
 
     state.lastAppliedRevision = revision;
+    log("APPLY_STATE completed", {
+      isPlaying: !video.paused,
+      currentTime: video.currentTime,
+      revision,
+    });
     log("동기화 완료, revision:", revision);
   } catch (error) {
     logError("동기화 중 에러:", error);
@@ -220,16 +235,21 @@ function setupPlayerEventListeners(): void {
   let lastEmittedTime = Date.now();
 
   video.addEventListener("play", () => {
+    if (Date.now() < state.suppressPlayerEventsUntil) return;
+    log("PLAYER_EVENT detected: PLAY", { currentTime: video.currentTime });
     log("PLAY 이벤트 감지");
     sendPlayerEvent("PLAY", video.currentTime);
   });
 
   video.addEventListener("pause", () => {
+    if (Date.now() < state.suppressPlayerEventsUntil) return;
+    log("PLAYER_EVENT detected: PAUSE", { currentTime: video.currentTime });
     log("PAUSE 이벤트 감지");
     sendPlayerEvent("PAUSE", video.currentTime);
   });
 
   video.addEventListener("timeupdate", () => {
+    if (Date.now() < state.suppressPlayerEventsUntil) return;
     // SEEK 감지: currentTime이 급격히 변함 (1초 이상)
     const deltaTime = Math.abs(video.currentTime - lastTimeUpdate);
     const now = Date.now();
@@ -240,6 +260,7 @@ function setupPlayerEventListeners(): void {
     }
 
     if (deltaTime > 1.0) {
+      log("PLAYER_EVENT detected: SEEK", { currentTime: video.currentTime });
       log("SEEK 이벤트 감지:", deltaTime.toFixed(2), "s");
       sendPlayerEvent("SEEK", video.currentTime);
       lastEmittedTime = now;
@@ -286,14 +307,69 @@ chrome.runtime.onMessage.addListener(
 /**
  * Content Script 초기화
  */
+async function applyStoredRoomState(): Promise<void> {
+  const result = (await chrome.storage.local.get("extensionState")) as {
+    extensionState?: ExtensionState;
+  };
+  const savedState = result.extensionState?.lastState;
+
+  if (!savedState || savedState.videoId !== extractVideoId()) {
+    return;
+  }
+
+  log("Stored room state applied after navigation:", savedState);
+  const video = await getVideo();
+  if (!video) {
+    return;
+  }
+
+  await waitForVideoMetadata(video);
+  await applyState({
+    type: MESSAGE_TYPE.APPLY_STATE,
+    isPlaying: savedState.isPlaying,
+    anchorTime: savedState.anchorTime,
+    anchorTs: savedState.anchorTs,
+    revision: savedState.revision,
+  });
+
+  if (!savedState.isPlaying) {
+    enforceInitialPause(video);
+  }
+}
+
+async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    video.addEventListener("loadedmetadata", () => resolve(), { once: true });
+  });
+}
+
+function enforceInitialPause(video: HTMLVideoElement): void {
+  const pause = () => {
+    if (!video.paused) {
+      log("Pausing YouTube autoplay for a paused room");
+      video.pause();
+    }
+  };
+
+  video.addEventListener("playing", pause, { once: true });
+  for (const delay of INITIAL_PAUSE_ENFORCEMENT_MS) {
+    setTimeout(pause, delay);
+  }
+}
+
 async function initialize(): Promise<void> {
   log("Content Script 초기화 중...");
 
   // Video element 찾기 (YouTube는 SPA이므로 시간이 걸릴 수 있음)
   const video = await getVideo();
   if (video) {
+    await applyStoredRoomState();
     // 플레이어 이벤트 리스너 설정 (선택 사항)
-    // setupPlayerEventListeners();
+    setupPlayerEventListeners();
   } else {
     logError("초기화 실패: video element 미발견");
   }
@@ -315,4 +391,11 @@ if (document.readyState === "loading") {
 window.addEventListener("yt-navigate-finish", () => {
   log("YouTube 페이지 변경 감지, 캐시 초기화");
   state.lastVideoElement = null;
+  setTimeout(async () => {
+    const video = await getVideo();
+    const videoId = extractVideoId();
+    if (video && videoId) {
+      chrome.runtime.sendMessage({ type: MESSAGE_TYPE.CHANGE_VIDEO, videoId, currentTime: video.currentTime, isPlaying: !video.paused });
+    }
+  }, 500);
 });

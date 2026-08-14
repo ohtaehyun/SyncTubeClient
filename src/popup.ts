@@ -232,6 +232,11 @@ async function getCurrentVideoState(): Promise<{
   return null;
 }
 
+async function getActiveTabId(): Promise<number | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id;
+}
+
 // ============= Service Worker 통신 =============
 
 /**
@@ -272,6 +277,7 @@ async function createRoom(): Promise<void> {
     return;
   }
   const { isPlaying, currentTime } = videoState;
+  const tabId = await getActiveTabId();
 
   const els = getElements();
   els.createRoomBtn.disabled = true;
@@ -284,6 +290,7 @@ async function createRoom(): Promise<void> {
       videoId,
       isPlaying,
       currentTime,
+      tabId,
     } as PopupToBackgroundMessage)) as CreateRoomResponse;
 
     console.log("CREATE_ROOM 응답:", response);
@@ -319,6 +326,7 @@ async function createRoom(): Promise<void> {
 async function joinRoom(): Promise<void> {
   const els = getElements();
   const code = els.roomCodeInput.value.trim().toUpperCase();
+  const tabId = await getActiveTabId();
 
   if (!code) {
     showMessage("방 코드를 입력해주세요.", "error");
@@ -338,6 +346,7 @@ async function joinRoom(): Promise<void> {
     const response = (await chrome.runtime.sendMessage({
       type: MESSAGE_TYPE.JOIN_ROOM,
       code,
+      tabId,
     } as PopupToBackgroundMessage)) as JoinRoomResponse;
 
     if (response && response.success) {

@@ -15,8 +15,11 @@ export enum MESSAGE_TYPE {
   LEAVE_ROOM = "LEAVE_ROOM",
   JOIN_ROOM = "JOIN_ROOM",
   HOST_EVENT = "HOST_EVENT",
+  CHANGE_VIDEO = "CHANGE_VIDEO",
   ROOM_STATE = "ROOM_STATE",
   STATE_PATCH = "STATE_PATCH",
+  VIDEO_CHANGED = "VIDEO_CHANGED",
+  ROOM_CLOSED = "ROOM_CLOSED",
   GET_STATUS = "GET_STATUS",
   STATUS = "STATUS",
   APPLY_STATE = "APPLY_STATE",
@@ -31,10 +34,14 @@ export type ClientToServerMessage =
   | CreateRoomMessage
   | LeaveRoomMessage
   | JoinRoomMessage
-  | HostEventMessage;
+  | HostEventMessage
+  | ChangeVideoMessage;
 
 /** 서버가 클라이언트로 보내는 메시지 타입 */
-export type ServerToClientMessage = RoomStateMessage | StatePatchMessage;
+export type ServerToClientMessage =
+  | RoomStateMessage
+  | StatePatchMessage
+  | RoomClosedMessage;
 
 export interface CreateRoomMessage {
   type: MESSAGE_TYPE.CREATE_ROOM;
@@ -79,6 +86,20 @@ export interface StatePatchMessage {
   revision: number;
 }
 
+export interface ChangeVideoMessage {
+  type: MESSAGE_TYPE.CHANGE_VIDEO;
+  code: string;
+  videoId: string;
+  currentTime: number;
+  isPlaying: boolean;
+}
+
+export interface RoomClosedMessage {
+  type: MESSAGE_TYPE.ROOM_CLOSED;
+  code: string;
+  reason: string;
+}
+
 // ============= 익스텐션 내부 메시지 타입 =============
 
 /** Popup → Service Worker */
@@ -93,6 +114,7 @@ export interface CreateRoomRequest {
   videoId: string;
   isPlaying: boolean;
   currentTime: number;
+  tabId?: number;
 }
 
 export interface LeaveRoomRequest {
@@ -103,6 +125,7 @@ export interface LeaveRoomRequest {
 export interface JoinRoomRequest {
   type: MESSAGE_TYPE.JOIN_ROOM;
   code: string;
+  tabId?: number;
 }
 
 export interface GetStatusRequest {
@@ -129,6 +152,8 @@ export interface JoinRoomResponse {
   code?: string;
   videoId?: string;
   url?: string;
+  currentTime?: number;
+  isPlaying?: boolean;
   error?: string;
 }
 

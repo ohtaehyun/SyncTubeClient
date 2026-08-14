@@ -39,6 +39,7 @@ interface BackgroundState {
   isConnected: boolean;
   reconnectTimer: number | null;
   lastVideoId: string | null;
+  roomTabId: number | null;
 }
 
 let state: BackgroundState = {
@@ -49,6 +50,7 @@ let state: BackgroundState = {
   isConnected: false,
   reconnectTimer: null,
   lastVideoId: null,
+  roomTabId: null,
 };
 
 // ============= 로깅 유틸 =============
@@ -89,12 +91,21 @@ function connectSocket(): void {
       // 기존 방이 있으면 재입장
       if (
         state.currentRoomCode &&
-        state.lastVideoId &&
         state.role === ROLE.JOINER
       ) {
         sendToServer({
           type: MESSAGE_TYPE.JOIN_ROOM,
           code: state.currentRoomCode,
+        }, (response) => {
+          if (response?.success === false) {
+            log("Rejoin failed; clearing a closed room", response);
+            state.currentRoomCode = null;
+            state.role = null;
+            state.lastRoomState = null;
+            state.lastVideoId = null;
+            state.roomTabId = null;
+            updateStorageState();
+          }
         });
 
         log("기존 방에 재입장:", state.currentRoomCode);
@@ -107,7 +118,15 @@ function connectSocket(): void {
     });
 
     state.socket.on("STATE_PATCH", (data: any) => {
+      log("STATE_PATCH received from server", data);
       handleServerMessage({ type: MESSAGE_TYPE.STATE_PATCH, ...data });
+    });
+    state.socket.on("VIDEO_CHANGED", (data: any) => {
+      handleVideoChanged(data);
+    });
+
+    state.socket.on("ROOM_CLOSED", (data: any) => {
+      handleServerMessage({ type: MESSAGE_TYPE.ROOM_CLOSED, ...data });
     });
 
     state.socket.on("disconnect", (reason: string) => {
@@ -205,9 +224,27 @@ async function handleServerMessage(
       await handleStatePatch(message);
       break;
 
+    case MESSAGE_TYPE.ROOM_CLOSED:
+      handleRoomClosed(message);
+      break;
+
     default:
       logError("알 수 없는 메시지 타입:", message);
   }
+}
+
+function handleRoomClosed(message: any): void {
+  if (state.currentRoomCode !== message.code) {
+    return;
+  }
+
+  log("ROOM_CLOSED received:", message);
+  state.currentRoomCode = null;
+  state.role = null;
+  state.lastRoomState = null;
+  state.lastVideoId = null;
+  updateStorageState();
+  notifyPopup();
 }
 
 /**
@@ -245,6 +282,12 @@ async function handleRoomState(message: any): Promise<void> {
  * 상태 변경 패치 처리
  */
 async function handleStatePatch(message: any): Promise<void> {
+  log("Applying STATE_PATCH to YouTube tab", {
+    code: message.code,
+    isPlaying: message.isPlaying,
+    anchorTime: message.anchorTime,
+    revision: message.revision,
+  });
   log("STATE_PATCH 수신:", message);
 
   if (state.lastRoomState) {
@@ -264,6 +307,8 @@ async function handleStatePatch(message: any): Promise<void> {
     revision: message.revision,
   });
 
+  log("STATE_PATCH forwarded to content script", { revision: message.revision });
+
   notifyPopup();
 }
 
@@ -274,6 +319,19 @@ async function handleStatePatch(message: any): Promise<void> {
  */
 async function getYouTubeTab(): Promise<chrome.tabs.Tab | null> {
   try {
+    if (state.roomTabId !== null) {
+      const tab = await chrome.tabs.get(state.roomTabId);
+      if (tab.url?.startsWith("https://www.youtube.com/")) return tab;
+    }
+
+    const activeTabs = await chrome.tabs.query({
+      url: "https://www.youtube.com/*",
+      active: true,
+    });
+    if (activeTabs[0]) {
+      return activeTabs[0];
+    }
+
     const tabs = await chrome.tabs.query({
       url: "https://www.youtube.com/*",
       active: false, // 모든 YouTube 탭 검색
@@ -318,11 +376,13 @@ function handleCreateRoom(
   videoId: string,
   isPlaying: boolean,
   currentTime: number,
+  tabId: number | undefined,
   sendResponse: (response: any) => void,
 ): void {
   log("CREATE_ROOM 요청:", videoId, isPlaying, currentTime);
 
   state.role = ROLE.HOST;
+  state.roomTabId = tabId ?? null;
   state.lastVideoId = videoId;
   updateStorageState();
 
@@ -354,6 +414,7 @@ function handleLeaveRoom(code: string): void {
   state.currentRoomCode = null;
   state.lastRoomState = null;
   state.lastVideoId = null;
+  state.roomTabId = null;
   updateStorageState();
   log("방 나가기 처리 완료:", code);
 }
@@ -363,6 +424,7 @@ function handleLeaveRoom(code: string): void {
  */
 function handleJoinRoom(
   code: string,
+  tabId: number | undefined,
   sendResponse: (response: any) => void,
 ): void {
   log("JOIN_ROOM 요청:", code);
@@ -378,14 +440,25 @@ function handleJoinRoom(
         // 성공했을 때만 state 업데이트
         state.currentRoomCode = code;
         state.role = ROLE.JOINER;
-        updateStorageState();
+        state.roomTabId = tabId ?? null;
+        state.lastVideoId = response.videoId ?? null;
+        state.lastRoomState = {
+          code,
+          videoId: response.videoId,
+          isPlaying: response.isPlaying,
+          anchorTime: response.currentTime,
+          anchorTs: Date.now(),
+          revision: 0,
+        };
         log("방 참여 완료");
-        sendResponse({
+        updateStorageState(() => sendResponse({
           success: true,
-          code: code,
+          code,
           videoId: response.videoId,
           url: response.url,
-        });
+          currentTime: response.currentTime,
+          isPlaying: response.isPlaying,
+        }));
       } else {
         logError("방 참여 실패:", response);
         sendResponse({ success: false, error: response.error });
@@ -433,6 +506,10 @@ async function notifyPopup(): Promise<void> {
  */
 function handlePlayerEvent(message: any): void {
   if (!state.currentRoomCode || state.role !== ROLE.HOST) {
+    log("PLAYER_EVENT ignored: client is not the current host", {
+      roomCode: state.currentRoomCode,
+      role: state.role,
+    });
     return; // 호스트만 처리
   }
 
@@ -446,6 +523,20 @@ function handlePlayerEvent(message: any): void {
   };
 
   sendToServer(hostEvent);
+}
+
+function handleVideoChanged(message: any): void {
+  if (!state.currentRoomCode || state.currentRoomCode !== message.code) return;
+  if (state.role === ROLE.HOST) {
+    log("VIDEO_CHANGED ignored by host", message);
+    return;
+  }
+  state.lastVideoId = message.videoId;
+  state.lastRoomState = { ...message, code: message.code };
+  updateStorageState();
+  getYouTubeTab().then((tab) => {
+    if (tab?.id) chrome.tabs.update(tab.id, { url: `https://www.youtube.com/watch?v=${message.videoId}` });
+  });
 }
 
 // ============= 메시지 리스너 =============
@@ -468,16 +559,18 @@ chrome.runtime.onMessage.addListener(
             message.videoId,
             message.isPlaying,
             message.currentTime,
+            message.tabId ?? sender.tab?.id,
             sendResponse,
           );
           return true;
 
         case MESSAGE_TYPE.LEAVE_ROOM:
           handleLeaveRoom(message.code);
-          return true;
+          sendResponse({ success: true });
+          return;
 
         case MESSAGE_TYPE.JOIN_ROOM:
-          handleJoinRoom(message.code, sendResponse);
+          handleJoinRoom(message.code, message.tabId ?? sender.tab?.id, sendResponse);
           return true;
 
         case MESSAGE_TYPE.GET_STATUS:
@@ -485,7 +578,24 @@ chrome.runtime.onMessage.addListener(
           return true;
 
         case MESSAGE_TYPE.PLAYER_EVENT:
+          if (sender.tab?.id !== state.roomTabId) {
+            log("PLAYER_EVENT ignored: message came from a non-room tab", sender.tab?.id);
+            sendResponse({ success: true });
+            return;
+          }
           handlePlayerEvent(message);
+          sendResponse({ success: true });
+          return;
+
+        case MESSAGE_TYPE.CHANGE_VIDEO:
+          if (sender.tab?.id !== state.roomTabId) {
+            log("CHANGE_VIDEO ignored: message came from a non-room tab", sender.tab?.id);
+            sendResponse({ success: true });
+            return;
+          }
+          if (state.currentRoomCode && state.role === ROLE.HOST) {
+            sendToServer({ ...message, code: state.currentRoomCode } as ClientToServerMessage);
+          }
           sendResponse({ success: true });
           return;
 
@@ -500,12 +610,25 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (state.roomTabId !== tabId || !state.currentRoomCode) {
+    return;
+  }
+
+  log("Room YouTube tab closed; leaving room", {
+    code: state.currentRoomCode,
+    role: state.role,
+    tabId,
+  });
+  handleLeaveRoom(state.currentRoomCode);
+});
+
 // ============= 상태 저장/로드 =============
 
 /**
  * 상태를 chrome.storage.local에 저장
  */
-function updateStorageState(): void {
+function updateStorageState(onComplete?: () => void): void {
   const extensionState: ExtensionState = {
     code: state.currentRoomCode,
     role: state.role,
@@ -514,6 +637,7 @@ function updateStorageState(): void {
   };
 
   chrome.storage.local.set({ extensionState }, () => {
+    onComplete?.();
     log("상태 저장 완료");
   });
 }
