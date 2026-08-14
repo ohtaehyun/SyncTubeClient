@@ -10,6 +10,8 @@
  */
 
 import { io, Socket } from "socket.io-client";
+
+declare const __SERVER_URL__: string;
 import {
   ClientToServerMessage,
   ServerToClientMessage,
@@ -25,7 +27,6 @@ import {
 } from "./shared/types";
 
 // ============= 설정 =============
-const SERVER_URL = "http://localhost:3000"; // Socket.IO 서버 URL
 const RECONNECT_DELAY_MS = 1000;
 const LOG_PREFIX = "[BG]";
 
@@ -73,10 +74,10 @@ function connectSocket(): void {
     return; // 이미 연결 중
   }
 
-  log("Socket.IO 연결 시도:", SERVER_URL);
+  log("Socket.IO 연결 시도:", __SERVER_URL__);
 
   try {
-    state.socket = io(SERVER_URL, {
+    state.socket = io(__SERVER_URL__, {
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: RECONNECT_DELAY_MS,

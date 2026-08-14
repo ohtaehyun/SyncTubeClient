@@ -9,8 +9,13 @@ const path = require("path");
 
 const args = process.argv.slice(2);
 const isWatch = args.includes("--watch");
+const serverUrlArg = args.find((arg) => arg.startsWith("--server-url="));
 
 const buildDir = path.join(__dirname, "..", "dist");
+const serverUrl =
+  serverUrlArg?.slice("--server-url=".length) ||
+  process.env.SYNCTUBE_SERVER_URL ||
+  "http://localhost:3000";
 
 // 빌드 디렉토리 생성
 if (!fs.existsSync(buildDir)) {
@@ -32,6 +37,9 @@ const buildOptions = {
   minify: false,
   treeShaking: true,
   logLevel: "info",
+  define: {
+    __SERVER_URL__: JSON.stringify(serverUrl),
+  },
 };
 
 async function build() {
