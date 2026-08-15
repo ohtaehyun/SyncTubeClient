@@ -29,13 +29,15 @@ interface ContentState {
   lastAppliedRevision: number;
   lastVideoElement: HTMLVideoElement | null;
   suppressPlayerEventsUntil: number;
+  pendingState: ApplyStateMessage | null;
 }
 
 let state: ContentState = {
   isApplying: false,
-  lastAppliedRevision: 0,
+  lastAppliedRevision: -1,
   lastVideoElement: null,
   suppressPlayerEventsUntil: 0,
+  pendingState: null,
 };
 
 // ============= 로깅 유틸 =============
@@ -114,8 +116,24 @@ function extractVideoId(): string | null {
  *   - |delta| ≥ 0.8s: 즉시 보정
  */
 async function applyState(message: ApplyStateMessage): Promise<void> {
+  if (message.revision <= state.lastAppliedRevision) {
+    log("이미 적용한 상태 무시", {
+      revision: message.revision,
+      lastAppliedRevision: state.lastAppliedRevision,
+    });
+    return;
+  }
+
   if (state.isApplying) {
-    log("이미 동기화 적용 중");
+    if (
+      !state.pendingState ||
+      message.revision >= state.pendingState.revision
+    ) {
+      state.pendingState = message;
+    }
+    log("동기화 적용 중이므로 최신 상태를 대기열에 저장", {
+      revision: message.revision,
+    });
     return;
   }
 
@@ -192,6 +210,14 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
     logError("동기화 중 에러:", error);
   } finally {
     state.isApplying = false;
+    const pendingState = state.pendingState;
+    state.pendingState = null;
+
+    // applyState()가 비동기인 동안 들어온 pause/play 상태를 버리지 않고,
+    // 현재 상태 적용이 끝난 뒤 이어서 적용한다.
+    if (pendingState) {
+      void applyState(pendingState);
+    }
   }
 }
 
