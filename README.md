@@ -15,7 +15,7 @@ YouTube 영상을 여러 사용자가 같은 재생 상태로 보는 Chrome Mani
 
 ```powershell
 npm install
-npm run build
+npm run build:local
 ```
 
 Chrome에서 다음을 실행합니다.
@@ -28,18 +28,17 @@ Chrome에서 다음을 실행합니다.
 소스를 수정한 뒤에는 다시 빌드하고 확장 프로그램과 YouTube 탭을 새로고침해야 합니다.
 
 ```powershell
-npm run build
+npm run build:local
 ```
 
 ## 서버 설정
 
-기본 서버 주소는 `src/background.ts`의 `SERVER_URL`입니다.
+빌드 모드는 서버 주소를 코드 수준에서 고정합니다.
 
-```ts
-const SERVER_URL = "http://localhost:3000";
-```
+- `npm run build:local`: `http://localhost:3000`을 사용합니다.
+- `npm run build` 또는 `npm run build:release`: `https://api.synch-tube.com`을 사용합니다.
 
-다른 PC나 배포 서버를 테스트할 때는 공개 HTTPS 주소로 바꾸고 다시 빌드해야 합니다. 해당 도메인은 `manifest.json`의 `host_permissions`에도 추가해야 합니다.
+운영 빌드는 로컬 주소나 임의의 환경 변수 값을 무시하고, 번들 생성 후에도 운영 API 주소가 포함됐는지 검사합니다. 따라서 `localhost`가 들어간 Chrome Web Store 업로드용 번들은 생성되지 않습니다.
 
 ## 로컬 테스트
 

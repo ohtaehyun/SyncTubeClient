@@ -1,10 +1,12 @@
 {
   "name": "synctubeclient",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Chrome Extension for synchronized YouTube watching",
   "scripts": {
-    "build": "node scripts/bundle.js",
-    "dev": "node scripts/bundle.js --watch",
+    "build": "npm run build:release",
+    "build:release": "node scripts/bundle.js --mode=production",
+    "build:local": "node scripts/bundle.js --mode=development",
+    "dev": "node scripts/bundle.js --mode=development --watch",
     "build:tsc": "node scripts/build.js"
   },
   "keywords": [
