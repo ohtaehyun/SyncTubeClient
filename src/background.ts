@@ -253,14 +253,16 @@ function handleRoomClosed(message: any): void {
  */
 async function handleRoomState(message: any): Promise<void> {
   log("ROOM_STATE 수신:", message);
+  const receivedAt = Date.now();
 
   const roomState: RoomState = {
     code: message.code,
     videoId: message.videoId,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
-    anchorTs: message.anchorTs,
+    anchorTs: receivedAt,
     revision: message.revision,
+    forceSync: message.forceSync === true,
   };
 
   state.lastRoomState = roomState;
@@ -272,8 +274,9 @@ async function handleRoomState(message: any): Promise<void> {
     type: MESSAGE_TYPE.APPLY_STATE,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
-    anchorTs: message.anchorTs,
+    anchorTs: receivedAt,
     revision: message.revision,
+    forceSync: message.forceSync === true,
   });
 
   notifyPopup();
@@ -290,12 +293,14 @@ async function handleStatePatch(message: any): Promise<void> {
     revision: message.revision,
   });
   log("STATE_PATCH 수신:", message);
+  const receivedAt = Date.now();
 
   if (state.lastRoomState) {
     state.lastRoomState.isPlaying = message.isPlaying;
     state.lastRoomState.anchorTime = message.anchorTime;
-    state.lastRoomState.anchorTs = message.anchorTs;
+    state.lastRoomState.anchorTs = receivedAt;
     state.lastRoomState.revision = message.revision;
+    state.lastRoomState.forceSync = message.forceSync === true;
     updateStorageState();
   }
 
@@ -304,8 +309,9 @@ async function handleStatePatch(message: any): Promise<void> {
     type: MESSAGE_TYPE.APPLY_STATE,
     isPlaying: message.isPlaying,
     anchorTime: message.anchorTime,
-    anchorTs: message.anchorTs,
+    anchorTs: receivedAt,
     revision: message.revision,
+    forceSync: message.forceSync === true,
   });
 
   log("STATE_PATCH forwarded to content script", { revision: message.revision });
@@ -532,8 +538,18 @@ function handleVideoChanged(message: any): void {
     log("VIDEO_CHANGED ignored by host", message);
     return;
   }
+  const receivedAt = Date.now();
   state.lastVideoId = message.videoId;
-  state.lastRoomState = { ...message, code: message.code };
+  state.lastRoomState = {
+    code: message.code,
+    videoId: message.videoId,
+    isPlaying: message.isPlaying,
+    anchorTime: message.anchorTime,
+    // 서버 시각 대신 수신 시각을 저장해, URL 이동 시간이 재생 시간에 반영된다.
+    anchorTs: receivedAt,
+    revision: message.revision,
+    forceSync: true,
+  };
   updateStorageState();
   getYouTubeTab().then((tab) => {
     if (tab?.id) chrome.tabs.update(tab.id, { url: `https://www.youtube.com/watch?v=${message.videoId}` });

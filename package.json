@@ -1,6 +1,6 @@
 {
   "name": "synctubeclient",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Chrome Extension for synchronized YouTube watching",
   "scripts": {
     "build": "npm run build:release",

@@ -41,6 +41,7 @@ export type ClientToServerMessage =
 export type ServerToClientMessage =
   | RoomStateMessage
   | StatePatchMessage
+  | VideoChangedMessage
   | RoomClosedMessage;
 
 export interface CreateRoomMessage {
@@ -84,14 +85,27 @@ export interface StatePatchMessage {
   anchorTime: number;
   anchorTs: number;
   revision: number;
+  // PLAY 재개 시 이전 재생 위치를 버리고 새 앵커로 맞추도록 지시합니다.
+  forceSync?: boolean;
 }
 
 export interface ChangeVideoMessage {
   type: MESSAGE_TYPE.CHANGE_VIDEO;
   code: string;
   videoId: string;
-  currentTime: number;
   isPlaying: boolean;
+  currentTime: number;
+}
+
+export interface VideoChangedMessage {
+  type: MESSAGE_TYPE.VIDEO_CHANGED;
+  code: string;
+  videoId: string;
+  isPlaying: boolean;
+  anchorTime: number;
+  anchorTs: number;
+  revision: number;
+  forceSync: boolean;
 }
 
 export interface RoomClosedMessage {
@@ -164,8 +178,10 @@ export interface ApplyStateMessage {
   type: MESSAGE_TYPE.APPLY_STATE;
   isPlaying: boolean;
   anchorTime: number;
+  // Background Service Worker가 서버 상태를 받은 로컬 시각입니다.
   anchorTs: number;
   revision: number;
+  forceSync?: boolean;
 }
 
 /** Content Script → Service Worker */
@@ -189,8 +205,11 @@ export interface RoomState {
   videoId: string;
   isPlaying: boolean;
   anchorTime: number;
+  // 서버 시각이 아니라 이 클라이언트가 상태를 받은 로컬 시각입니다.
+  // 서로 다른 PC의 시계 차이로 재생 위치가 어긋나는 것을 방지합니다.
   anchorTs: number;
   revision: number;
+  forceSync?: boolean;
 }
 
 export interface ExtensionState {

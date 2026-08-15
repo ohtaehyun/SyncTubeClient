@@ -21,6 +21,7 @@ const LOG_PREFIX = "[CS]";
 const VIDEO_SEARCH_RETRY_LIMIT = 10;
 const VIDEO_SEARCH_RETRY_DELAY_MS = 500;
 const INITIAL_PAUSE_ENFORCEMENT_MS = [0, 250, 1000, 2000];
+const AD_STATE_CHECK_INTERVAL_MS = 500;
 
 // ============= 상태 관리 =============
 
@@ -30,6 +31,8 @@ interface ContentState {
   lastVideoElement: HTMLVideoElement | null;
   suppressPlayerEventsUntil: number;
   pendingState: ApplyStateMessage | null;
+  latestState: ApplyStateMessage | null;
+  wasShowingAd: boolean;
 }
 
 let state: ContentState = {
@@ -38,6 +41,8 @@ let state: ContentState = {
   lastVideoElement: null,
   suppressPlayerEventsUntil: 0,
   pendingState: null,
+  latestState: null,
+  wasShowingAd: false,
 };
 
 // ============= 로깅 유틸 =============
@@ -59,13 +64,11 @@ function logError(...args: any[]): void {
 async function getVideo(
   retryCount: number = 0,
 ): Promise<HTMLVideoElement | null> {
-  // 캐시된 video element가 있고 여전히 DOM에 있으면 사용
-  if (state.lastVideoElement && state.lastVideoElement.parentElement) {
-    return state.lastVideoElement;
-  }
-
-  // 새로운 video element 검색
-  const video = document.querySelector<HTMLVideoElement>("video");
+  // 광고 전환이나 SPA 이동 중 video 엘리먼트가 교체될 수 있으므로,
+  // 캐시보다 현재 메인 플레이어의 엘리먼트를 우선한다.
+  const video = document.querySelector<HTMLVideoElement>(
+    "#movie_player video.html5-main-video, video.html5-main-video, video",
+  );
 
   if (video) {
     state.lastVideoElement = video;
@@ -86,6 +89,33 @@ async function getVideo(
 
   logError("Video element를 찾을 수 없음");
   return null;
+}
+
+function isAdvertisementShowing(): boolean {
+  return document.querySelector(
+    "#movie_player.ad-showing, .html5-video-player.ad-showing",
+  ) !== null;
+}
+
+function monitorAdvertisementEnd(): void {
+  window.setInterval(() => {
+    const isShowingAd = isAdvertisementShowing();
+
+    if (isShowingAd) {
+      state.wasShowingAd = true;
+      return;
+    }
+
+    if (!state.wasShowingAd) {
+      return;
+    }
+
+    state.wasShowingAd = false;
+    if (state.latestState) {
+      log("광고 종료 감지: 최신 방 상태를 본편에 다시 적용");
+      void applyState(state.latestState, true);
+    }
+  }, AD_STATE_CHECK_INTERVAL_MS);
 }
 
 /**
@@ -110,13 +140,24 @@ function extractVideoId(): string | null {
  * 서버 상태를 로컬 플레이어에 적용
  * 동기화 규칙:
  * - 대상 시간 계산: isPlaying ? anchorTime + (now - anchorTs)/1000 : anchorTime
+ *   anchorTs는 서버 시간이 아니라 이 클라이언트가 상태를 받은 로컬 시간입니다.
  * - 차이 비교:
  *   - |delta| < 0.15s: 그대로
  *   - 0.15s ≤ |delta| < 0.8s: currentTime 설정
  *   - |delta| ≥ 0.8s: 즉시 보정
  */
-async function applyState(message: ApplyStateMessage): Promise<void> {
-  if (message.revision <= state.lastAppliedRevision) {
+async function applyState(
+  message: ApplyStateMessage,
+  force: boolean = false,
+): Promise<void> {
+  if (
+    !state.latestState ||
+    message.revision >= state.latestState.revision
+  ) {
+    state.latestState = message;
+  }
+
+  if (!force && message.revision <= state.lastAppliedRevision) {
     log("이미 적용한 상태 무시", {
       revision: message.revision,
       lastAppliedRevision: state.lastAppliedRevision,
@@ -146,19 +187,36 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
   });
 
   try {
+    // 광고 시간은 본편의 currentTime과 다른 타임라인이다. 광고 중 seek하면
+    // 본편 동기화가 되지 않으므로, 광고 종료 감시자가 같은 상태를 재적용한다.
+    if (isAdvertisementShowing()) {
+      state.wasShowingAd = true;
+      log("광고 재생 중: 본편 동기화를 광고 종료 후로 보류", {
+        revision: message.revision,
+      });
+      return;
+    }
+
     const video = await getVideo();
     if (!video) {
       logError("Video element 접근 실패");
       return;
     }
 
-    const { isPlaying, anchorTime, anchorTs, revision } = message;
+    const {
+      isPlaying,
+      anchorTime,
+      anchorTs,
+      revision,
+      forceSync = false,
+    } = message;
 
     log("APPLY_STATE:", {
       isPlaying,
       anchorTime,
       anchorTs,
       revision,
+      forceSync,
       currentTime: video.currentTime,
     });
 
@@ -174,7 +232,10 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
       `시간 델타: ${delta.toFixed(3)}s (현재: ${video.currentTime.toFixed(2)}s, 목표: ${targetTime.toFixed(2)}s)`,
     );
 
-    if (delta < 0.15) {
+    if (forceSync) {
+      log("재생 재개: 새 앵커 시간으로 강제 재동기화");
+      video.currentTime = targetTime;
+    } else if (delta < 0.15) {
       log("델타 < 0.15s, 그대로 유지");
     } else if (delta < 0.8) {
       log("델타 < 0.8s, 부드러운 조정");
@@ -197,6 +258,17 @@ async function applyState(message: ApplyStateMessage): Promise<void> {
     } catch (error) {
       logError("재생 상태 변경 실패:", error);
       // 에러가 발생해도 계속 진행 (동기화 실패로 처리하지 않음)
+    }
+
+    // 영상 전환·재생 재개에서는 첫 seek 이후 실제 재생까지 버퍼링이 생길 수 있다.
+    // playing 시점에 다시 계산해야 버퍼링 시간만큼 뒤처진 채 시작하지 않는다.
+    if (forceSync && isPlaying) {
+      await waitForPlaybackStart(video);
+      const playbackReadyTarget = anchorTime + (Date.now() - anchorTs) / 1000;
+      log("재생 준비 완료: 최신 앵커 시간으로 재보정", {
+        targetTime: playbackReadyTarget,
+      });
+      video.currentTime = playbackReadyTarget;
     }
 
     state.lastAppliedRevision = revision;
@@ -356,6 +428,7 @@ async function applyStoredRoomState(): Promise<void> {
     anchorTime: savedState.anchorTime,
     anchorTs: savedState.anchorTs,
     revision: savedState.revision,
+    forceSync: savedState.forceSync,
   });
 
   if (!savedState.isPlaying) {
@@ -370,6 +443,27 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
 
   await new Promise<void>((resolve) => {
     video.addEventListener("loadedmetadata", () => resolve(), { once: true });
+  });
+}
+
+async function waitForPlaybackStart(video: HTMLVideoElement): Promise<void> {
+  if (
+    !video.paused &&
+    video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+  ) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, 5_000);
+    video.addEventListener(
+      "playing",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
   });
 }
 
@@ -394,6 +488,7 @@ async function initialize(): Promise<void> {
   const video = await getVideo();
   if (video) {
     await applyStoredRoomState();
+    monitorAdvertisementEnd();
     // 플레이어 이벤트 리스너 설정 (선택 사항)
     setupPlayerEventListeners();
   } else {
